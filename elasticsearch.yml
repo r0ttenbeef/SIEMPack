@@ -1,0 +1,9 @@
+network.host: 0.0.0.0
+http.port: 9200
+node.name: "elastic01"
+cluster.name: "siempack"
+bootstrap.memory_lock: true
+script.allowed_types: inline
+thread_pool.search.queue_size: 100000
+thread_pool.write.queue_size: 10000
+xpack.security.enabled: false

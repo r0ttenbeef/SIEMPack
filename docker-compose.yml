@@ -1,0 +1,216 @@
+version: '3.4'
+
+services:
+  nginx:
+    image: nginx:latest
+    container_name: nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/dashboard.opcenter.local.conf:/etc/nginx/conf.d/dashboard.opcenter.local.conf
+      - ./nginx/main-operation.opcenter.local.conf:/etc/nginx/conf.d/main-operation.opcenter.local.conf
+      - ./nginx/cortex.opcenter.local.conf:/etc/nginx/conf.d/cortex.opcenter.local.conf
+      - ./nginx/intel.opcenter.local.conf:/etc/nginx/conf.d/intel.opcenter.local.conf
+      - ./nginx/orchest.opcenter.local.conf:/etc/nginx/conf.d/orchest.opcenter.local.conf
+      - ./nginx/logs:/var/log/nginx
+      - ./nginx/ssl:/etc/nginx/ssl
+
+  elasticsearch:
+    build:
+      context: ./
+      target: elasticsearch
+    image: elasticsearch:7.12.1
+    container_name: elasticsearch
+    hostname: elastic01
+    restart: always
+    ports:
+      - "9200:9200"
+    environment:
+      - ELASTIC_USERNAME=${ELASTIC_USER}
+      - ELASTIC_PASSWORD=${ELASTIC_PASS}
+      - http.host=0.0.0.0
+      - xpack.security.enabled=false
+      - cluster.name=hive
+      - bootstrap.memory_lock=true
+      - script.allowed_types=inline
+      - thread_pool.search.queue_size=100000
+      - thread_pool.write.queue_size=10000
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms256m -Xmx256m"
+    volumes:
+      - ./elasticsearch:/usr/share/elasticsearch/data
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  kibana:
+    build:
+      context: ./
+      target: kibana
+    image: kibana:7.12.1
+    container_name: kibana
+    hostname: kibana_container
+    restart: always
+    ports:
+      - 5601:5601
+    environment:
+      - ELASTICSEARCH_USERNAME=${ELASTIC_USER}
+      - ELASTICSEARCH_PASSWORD=${ELASTIC_PASS}
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+    depends_on:
+      - elasticsearch
+    links:
+      - elasticsearch:elasticsearch
+    
+  filebeat:
+    build:
+      context: ./
+      target: filebeat
+    image: elastic/filebeat:7.12.1
+    container_name: filebeat
+    hostname: filebeat_container
+    restart: always
+    user: root
+    environment:
+      - ELASTICSEARCH_HOST=http://elasticsearch:9200
+      - KIBANA_HOST=http://kibana:5601
+      - ELASTICSEARCH_USERNAME=${ELASTIC_USER}
+      - ELASTICSEARCH_PASSWORD=${ELASTIC_PASS}
+    volumes:
+      - ./filebeat:/usr/share/filebeat/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/containers/:/var/lib/docker/containers/:ro
+      - ./filebeat/logs:/var/log/:ro
+    command: ["--strict.perms=false"]
+    
+  wazuh:
+    image: wazuh/wazuh:4.2.5
+    container_name: wazuh_manager
+    hostname: wazuh-manage_container
+    restart: always
+    ports:
+      - "1514:1514"
+      - "1515:1515"
+      - "55000:55000"
+    environment:
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+        #- ELASTICSEARCH_USERNAME=${ELASTIC_USER}
+        #- ELASTICSEARCH_PASSWORD=${ELASTIC_PASS}
+        #- API_USERNAME=${WAZUH_API_USER}
+        #- API_PASSWORD=${WAZUH-API_PASS}
+      - FILEBEAT_SSL_VERIFICATION_MODE=none
+
+  thehive:
+    image: thehiveproject/thehive4:latest
+    container_name: thehive
+    hostname: thehive_container
+    restart: always
+    ports:
+      - "9000:9000"
+    depends_on:
+      - elasticsearch
+      - cortex
+    volumes:
+      - ./thehive/application.conf:/etc/thehive/application.conf
+      - ./thehive:/opt/thp
+    command: '--no-config --no-config-secret'
+
+  cortex:
+    image: thehiveproject/cortex:latest
+    container_name: cortex
+    hostname: cortex_container
+    privileged: true
+    restart: always
+    ports:
+      - "9001:9001"
+    environment:
+      - JOB_DIRECTORY=/opt/cortex/jobs
+    volumes:
+      - ./cortex/application.conf:/etc/cortex/application.conf
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp:/tmp
+    command: '--job-directory /opt/cortex/jobs --no-config'
+    depends_on:
+      - elasticsearch
+
+  misp:
+    image: misp:latest
+    build:
+      context: .
+      target: misp
+    container_name: misp
+    hostname: misp_container
+    restart: always
+    volumes:
+      - ./misp-files/wait-for-it.sh:/usr/local/bin/wait-for-it.sh:ro
+      - /dev/urandom:/dev/urandom
+      - ./misp/web:/var/www/MISP
+    environment:
+      - MYSQL_HOST=${MYSQL_HOST}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MISP_ADMIN_EMAIL=${MISP_ADMIN_EMAIL}
+      - MISP_ADMIN_PASSPHRASE=${MISP_ADMIN_PASSPHRASE}
+      - MISP_BASEURL=${MISP_BASEURL}
+      - POSTFIX_RELAY_HOST=${POSTFIX_RELAY_HOST}
+      - TIMEZONE=${TIMEZONE}
+    entrypoint: "wait-for-it.sh -t 0 -h misp_db -p 3306 -- /run.sh"
+    depends_on:
+      - misp-db
+
+  misp-db:
+    image: mysql/mysql-server:5.7
+    container_name: misp_db
+    hostname: misp_db_container
+    restart: always
+    volumes:
+      - ./misp/db:/var/lib/mysql
+    environment:
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+  
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    hostname: n8nio_container
+    restart: always
+    volumes:
+      - ./n8n:/home/node/.n8n
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=n8n-postgresdb
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
+      - DB_POSTGRESDB_USER=${POSTGRES_NON_ROOT_USER}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_NON_ROOT_PASSWORD}
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER
+      - N8N_BASIC_AUTH_PASSWORD
+    command: /bin/sh -c "sleep 5; n8n start"
+    links:
+      - n8n-db
+
+  n8n-db:
+    image: postgres:11
+    container_name: n8n-postgresdb
+    hostname: postgres-n8n_container
+    restart: always
+    volumes:
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/init-data.sh
+    environment:
+      - POSTGRES_USER
+      - POSTGRES_PASSWORD
+      - POSTGRES_DB
+      - POSTGRES_NON_ROOT_USER
+      - POSTGRES_NON_ROOT_PASSWORD
+
+volumes:
+  elasticsearch:
+  thehive:
+    driver: local
