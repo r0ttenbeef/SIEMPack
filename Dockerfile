@@ -21,7 +21,7 @@ COPY wazuh-filebeat.tar.gz /usr/share/filebeat/wazuh-filebeat.tar.gz
 RUN tar -xvzf /usr/share/filebeat/wazuh-filebeat.tar.gz -C /usr/share/filebeat/module
 
 # Install misp under ubuntu image
-FROM ubuntu:latest AS misp
+FROM ubuntu:20.04 AS misp
 
 # Install core components
 ENV DEBIAN_FRONTEND noninteractive
